@@ -1,0 +1,49 @@
+{:components
+ {:app       #var duct.component.handler/handler-component
+  :http      #var ring.component.jetty/jetty-server
+  :datomic   #var clj-oauth-server.component.datomic/datomic-component
+  :auth      #var clj-oauth-server.component.authorization/authorization-component
+  :account   #var clj-oauth-server.component.account/account-component
+  :migration #var clj-oauth-server.component.migration/migration-component}
+ :endpoints
+ {:api  #var clj-oauth-server.endpoint.api/api-endpoint}
+ :dependencies
+ {:http      [:app]
+  :app       [:api]
+  :api       [:auth :account]
+  :migration [:datomic]
+  :auth      [:datomic]
+  :account   [:auth :datomic]}
+ :config
+ {:app
+  {:middleware
+   {:functions
+    {:hide-errors   #var duct.middleware.errors/wrap-hide-errors
+     :not-found     #var duct.middleware.not-found/wrap-not-found
+     :ring-defaults #var ring.middleware.defaults/wrap-defaults
+     :route-aliases #var duct.middleware.route-aliases/wrap-route-aliases}
+    :applied
+    [:not-found :ring-defaults :route-aliases :hide-errors]
+    :arguments
+    {:not-found   "Resource Not Found"
+     :hide-errors "Internal Server Error"
+     :route-aliases {"/" "/index.html"}
+     :ring-defaults
+     {:params    {:urlencoded true
+                  :keywordize true
+                  :multipart  true
+                  :nested     true}
+      :cookies   true
+      :session   {:flash true
+                  :cookie-attrs {:http-only true}}
+      :security  {:anti-forgery   false
+                  :xss-protection {:enable? true :mode :block}
+                  :frame-options  :sameorigin
+                  :content-type-options :nosniff}
+      :static    {:resources "clj_oauth_server/public"}
+      :responses {:not-modified-responses true
+                  :absolute-redirects     true
+                  :content-types          true
+                  :default-charset        "utf-8"}}}}}
+  :http {:port http-port}
+  :datomic {:uri datomic-uri}}}
