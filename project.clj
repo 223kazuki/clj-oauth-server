@@ -17,7 +17,8 @@
                  [datomic-schema "1.3.0"]
                  [buddy "1.3.0"]
                  [re-rand "0.1.0"]
-                 [org.clojure/data.json "0.2.6"]]
+                 [org.clojure/data.json "0.2.6"]
+                 [hiccup "1.0.5"]]
   :plugins [[lein-environ "1.0.3"]]
   :main ^:skip-aot clj-oauth-server.main
   :target-path "target/%s/"

@@ -13,10 +13,27 @@
   (liberator/resource
    :available-media-types ["application/json"]
    :allowed-methods [:get :post]
-   :allowed? (fn [{{:keys []} :request}]
-               true)
+   :allowed? (fn [context]
+               (let [{:keys [headers] :as request} (:request context)
+                     access_token (-> headers
+                                      (get "authorization")
+                                      (clojure.string/split #" ")
+                                      second)
+                     client-info (auth/auth-by auth access_token)]
+                 client-info))
    :handle-ok (fn [req]
-                (json/write-str []))))
+                (json/write-str [{:id 0
+                                  :name "test-user1"}
+                                 {:id 1
+                                  :name "test-user2"}
+                                 {:id 2
+                                  :name "test-user3"}
+                                 {:id 3
+                                  :name "test-user4"}
+                                 {:id 4
+                                  :name "test-user5"}
+                                 {:id 5
+                                  :name "test-user6"}]))))
 
 (defrecord AccountComponent [options]
   component/Lifecycle
