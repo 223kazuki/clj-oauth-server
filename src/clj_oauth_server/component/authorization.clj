@@ -11,6 +11,14 @@
             [hiccup.page :refer [html5 include-css include-js]])
   (:import [java.util UUID]))
 
+(def db
+  {:client [{:client_id     "6P1kUE5eEY"
+             :client_secret "lxcK6KWOTN"
+             :client_type   "PUBLIC"
+             :redirect_uris "http://localhost:3001/cb"}]
+   :user   [{:id       "223"
+             :password "223"}]})
+
 (defn login-page [auth context]
   (html5
    [:head
@@ -50,14 +58,6 @@
     (include-js "https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js")
     (include-js "https://maxcdn.bootstrapcdn.com/bootstrap/3.3.0/js/bootstrap.min.js")]))
 
-(def db
-  {:client [{:client_id     "6P1kUE5eEY"
-             :client_secret "lxcK6KWOTN"
-             :client_type   "PUBLIC"
-             :redirect_uris "https://meidai-sumo.club/cb"}]
-   :user   [{:id       "223"
-             :password "223"}]})
-
 (defn find-client-by-id [client-id]
   (->> db
        :client
@@ -90,7 +90,7 @@
         (cond
           (not (and response_type client_id redirect_uri state))
           {:status 302
-           :headers {"Location" (format "%s?error=%s?state=%s" redirect_uri "invalid_request" state)}}
+           :headers {"Location" (format "%s?error=%s&state=%s" redirect_uri "invalid_request" state)}}
 
           (some-> client
                   :redirect_uris
@@ -115,14 +115,14 @@
                                                         set) redirect_uri)
                                      :scope scope})]
             {:status 302
-             :headers {"Location" (format "%s?code=%s?state=%s" redirect_uri code state)}}))
+             :headers {"Location" (format "%s?code=%s&state=%s" redirect_uri code state)}}))
 
         "token"
         ;; TODO
         nil
 
         {:status 302
-         :headers {"Location" (format "%s?error=%s?state=%s" redirect_uri "unsupported_response_type" state)}}))))
+         :headers {"Location" (format "%s?error=%s&state=%s" redirect_uri "unsupported_response_type" state)}}))))
 
 (defn access-token-resource
   [{:keys [datomic] :as auth}]

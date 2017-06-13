@@ -34,27 +34,27 @@
                      :params         {:response_type "code"
                                       :client_id     "6P1kUE5eEY"
                                       :state         "3lR1fhAqmF"
-                                      :redirect_uri  "https://meidai-sumo.club/cb"
+                                      :redirect_uri  "http://localhost:3001/cb"
                                       :username      "223"
                                       :password      "223"}}
             {:keys [status headers body] :as res}
             (authorize-handler request)
 
             uri                  (java.net.URI. (get headers "Location"))
-            {:keys [code state]} (->> (clojure.string/split (.getQuery uri) #"\?")
+            {:keys [code state]} (->> (clojure.string/split (.getQuery uri) #"&")
                                       (map #(clojure.string/split % #"="))
                                       (reduce #(assoc %1 (keyword (first %2)) (second %2)) {}))]
         (are [x y] (= x y)
           302                status
-          "https"            (.getScheme uri)
-          "meidai-sumo.club" (.getHost uri)
+          "http"             (.getScheme uri)
+          "localhost"        (.getHost uri)
           "/cb"              (.getPath uri)
           "3lR1fhAqmF"       state)
         (let [request                               {:request-method :post
                                                      :content-type   "application/x-www-form-urlencoded"
                                                      :params         {:grant_type   "authorization_code"
                                                                       :client_id    "6P1kUE5eEY"
-                                                                      :redirect_uri "https://meidai-sumo.club/cb"
+                                                                      :redirect_uri "http://localhost:3001/cb"
                                                                       :code         code}}
               {:keys [status headers body] :as res} (access-token-handler request)
               {:keys [access_token token_type
