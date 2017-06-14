@@ -12,10 +12,12 @@
   (:import [java.util UUID]))
 
 (def db
-  {:client [{:client_id     "6P1kUE5eEY"
-             :client_secret "lxcK6KWOTN"
-             :client_type   "PUBLIC"
-             :redirect_uris "http://localhost:3001/cb"}]
+  {:client [{:client_id        "6P1kUE5eEY"
+             :client_secret    "lxcK6KWOTN"
+             :client_type      "PUBLIC"
+             :redirect_uris    "http://localhost:3001/cb"
+             :application_name "Sample Application"
+             :application_type "WEB"}]
    :user   [{:id       "223"
              :password "223"}]})
 
@@ -38,7 +40,7 @@
         [:h1.title "OAuth 2.0 Server"]
         [:hr ]]]
       [:div.main-login.main-center
-       [:form.form-horizontal {:method "post"}
+       [:form.form-horizontal {:method "post" }
         (when-let [error (:error context)]
           [:div.alert.alert-danger error])
         [:div.form-group
@@ -71,13 +73,66 @@
                      (= (:password %) password)))
        first))
 
-(defprotocol IAuthorizationCodeProvider
+(defprotocol IOAuth2Provider
   (new-code  [this client])
-  (auth-code [this code]))
-
-(defprotocol ITokenProvider
+  (auth-code [this code])
   (new-token [this token-info])
   (auth-by   [this token]))
+
+(defn get-port-or-default-port
+  [uri]
+  (let [port (.getPort uri)]
+    (if-not (== port -1)
+      port
+      (try
+        (.. uri toURL getDefaultPort)
+        (catch Exception e
+          -1)))))
+
+(defn get-redirect-uri
+  [redirect-uri response-type client]
+  (let [{:keys [client_type redirect_uris]} client
+        redirect-uris (some-> redirect_uris
+                              (clojure.string/split #" "))]
+    (when-not (or (and (empty? redirect-uris)
+                       (or (= client_type "PUBLIC")
+                           (= response-type "token")))
+                  (if (nil? redirect-uri)
+                    (not= 1 (count redirect_uris))
+                    (if (empty? redirect-uris)
+                      (or (not (.isAbsolute (java.net.URI. redirect-uri)))
+                          (.getFragment (java.net.URI. redirect-uri)))
+                      (or (not (.isAbsolute (java.net.URI. redirect-uri)))
+                          (.getFragment (java.net.URI. redirect-uri))
+                          (not-any? #(let [specified (java.net.URI. redirect-uri)
+                                           registerd (java.net.URI. %)]
+                                       (or
+                                        (and (.getQuery registerd)
+                                             (= (.equals registerd specified)))
+                                        (and (= (.getScheme specified) (.getScheme registerd))
+                                             (= (.getUserInfo specified) (.getUserInfo registerd))
+                                             (.equalsIgnoreCase (.getHost specified) (.getHost registerd))
+                                             (== (get-port-or-default-port specified)
+                                                 (get-port-or-default-port registerd))
+                                             (= (.getPath specified) (.getPath registerd)))))
+                                    redirect-uris)))))
+      (let [redirect-uri (if (and (nil? redirect-uri)
+                                  (= 1 (count redirect_uris)))
+                           (first redirect-uri)
+                           redirect-uri)]
+        (condp = (:application_type client)
+          "WEB"    (when-not (and (= response-type "token")
+                                  (or (not= "https" (.getScheme (java.net.URI. redirect-uri)))
+                                      (= "localhost" (.getHost (java.net.URI. redirect-uri)))))
+                     redirect-uri)
+          "NATIVE" (when-not (or (= "https" (.getScheme (java.net.URI. redirect-uri)))
+                                 (and (= "http" (.getScheme (java.net.URI. redirect-uri)))
+                                      (not= "localhost" (.getHost (java.net.URI. redirect-uri)))))))))))
+
+(defn authorization-error-response
+  [redirect-uri error-code state]
+  {:status 302
+   :headers {"Location" (format "%s?error=%s&state=%s" redirect-uri error-code state)}})
 
 (defn authorize-resource
   [{:keys [datomic] :as auth}]
@@ -85,44 +140,36 @@
     (let [{:keys [response_type client_id redirect_uri scope state
                   username password]} (:params request)
           client (find-client-by-id client_id)]
-      (case response_type
-        "code"
-        (cond
-          (not (and response_type client_id redirect_uri state))
-          {:status 302
-           :headers {"Location" (format "%s?error=%s&state=%s" redirect_uri "invalid_request" state)}}
+      (if-let [redirect-uri (and response_type
+                                 client_id
+                                 client
+                                 (get-redirect-uri redirect_uri response_type client))]
+        (case response_type
+          "code"
+          (cond
+            (not (authenticate-user username password))
+            {:status 200
+             :headers {"Content-Type" "text/html"}
+             :body (login-page auth {:error "Invalid username or password."})}
 
-          (some-> client
-                  :redirect_uris
-                  (clojure.string/split #" ")
-                  set
-                  (contains? redirect_uri)
-                  not)
-          {:status 200
-           :headers {"Content-Type" "text/html"}
-           :body (login-page auth {:error "Invalid oauth 2.0 parameters."})}
+            :else
+            (let [code (new-code auth {:client_id client_id
+                                       :redirect_uri ((-> client
+                                                          :redirect_uris
+                                                          (clojure.string/split #" ")
+                                                          set) redirect_uri)
+                                       :scope scope})]
+              {:status 302
+               :headers {"Location" (format "%s?code=%s&state=%s" redirect_uri code state)}}))
 
-          (not (authenticate-user username password))
-          {:status 200
-           :headers {"Content-Type" "text/html"}
-           :body (login-page auth {:error "Invalid username or password."})}
+          ;; TODO
+          "token"
+          (authorization-error-response redirect_uri "unsupported_response_type" state)
 
-          :else
-          (let [code (new-code auth {:client_id client_id
-                                     :redirect_uri ((-> client
-                                                        :redirect_uris
-                                                        (clojure.string/split #" ")
-                                                        set) redirect_uri)
-                                     :scope scope})]
-            {:status 302
-             :headers {"Location" (format "%s?code=%s&state=%s" redirect_uri code state)}}))
-
-        "token"
-        ;; TODO
-        nil
-
-        {:status 302
-         :headers {"Location" (format "%s?error=%s&state=%s" redirect_uri "unsupported_response_type" state)}}))))
+          (authorization-error-response redirect_uri "unsupported_response_type" state))
+        {:status 200
+         :headers {"Content-Type" "text/html"}
+         :body (login-page auth {:error "Invalid oauth 2.0 parameters."})}))))
 
 (defn access-token-resource
   [{:keys [datomic] :as auth}]
@@ -181,19 +228,16 @@
       (dissoc component :code-cache :token-cache)
       component))
 
-  IAuthorizationCodeProvider
+  IOAuth2Provider
   (new-code [component client]
     (let [{:keys [client_id redirect_uri]} client
           code (re-rand #"[a-zA-Z0-9]{10}")]
       (swap! (:code-cache component) assoc code client)
       code))
-
   (auth-code [component code]
     (when-let [client (cache/lookup @(:code-cache component) code)]
       (swap! (:code-cache component) dissoc code)
       client))
-
-  ITokenProvider
   (new-token [component token-info]
     (let [access-token (re-rand #"[a-zA-Z0-9]{22}")]
       (swap! (:token-cache component) assoc access-token token-info)

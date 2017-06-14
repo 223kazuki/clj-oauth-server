@@ -21,6 +21,53 @@
         :account [:auth :datomic]})
       (component/start-system)))
 
+(deftest get-redirect-uri-test
+  (testing "Sucess"
+    (is
+     (= "https://example.com/cb"
+      (auth/get-redirect-uri "https://example.com/cb"
+                             "code"
+                             {:client_id        "6P1kUE5eEY"
+                              :client_secret    "lxcK6KWOTN"
+                              :client_type      "PUBLIC"
+                              :redirect_uris    "https://example.com/cb"
+                              :application_name "Sample Application"
+                              :application_type "WEB"}))))
+  (testing "Redirect uris does not exists and PUBLIC client."
+    (is
+     (= (nil?
+         (auth/get-redirect-uri "https://example.com/cb"
+                                "code"
+                                {:client_id        "6P1kUE5eEY"
+                                 :client_secret    "lxcK6KWOTN"
+                                 :client_type      "PUBLIC"
+                                 :redirect_uris    ""
+                                 :application_name "Sample Application"
+                                 :application_type "WEB"})))))
+  (testing "Redirect uris does not exists and token response type."
+    (is
+     (= (nil?
+         (auth/get-redirect-uri "https://example.com/cb"
+                                "token"
+                                {:client_id        "6P1kUE5eEY"
+                                 :client_secret    "lxcK6KWOTN"
+                                 :client_type      "CONFIDENTIAL"
+                                 :redirect_uris    ""
+                                 :application_name "Sample Application"
+                                 :application_type "WEB"})))))
+  (testing "Redirect uris does not exists and token response type."
+    (is
+     (= (nil?
+         (auth/get-redirect-uri "https://example.com/cb"
+                                "token"
+                                {:client_id        "6P1kUE5eEY"
+                                 :client_secret    "lxcK6KWOTN"
+                                 :client_type      "CONFIDENTIAL"
+                                 :redirect_uris    ""
+                                 :application_name "Sample Application"
+                                 :application_type "WEB"})))))
+  )
+
 (deftest authorize-test
   (let [system               (test-system test-config)
         authorize-handler    (auth/authorize-resource (:auth system))
@@ -28,7 +75,7 @@
         introspect-handler   (auth/introspect-resource (:auth system))
         account-handler      (account/list-resource (:account system))]
     (testing "Authorize successfully."
-      ;; http://localhost:3000/authorize?response_type=code&client_id=s6BhdRkqt3&state=xyz&redirect_uri=https%3A%2F%2Fclient%2Eexample%2Ecom%2Fcb
+      ;; Get authorization code.
       (let [request {:request-method :post
                      :content-type   "application/x-www-form-urlencoded"
                      :params         {:response_type "code"
@@ -37,6 +84,7 @@
                                       :redirect_uri  "http://localhost:3001/cb"
                                       :username      "223"
                                       :password      "223"}}
+
             {:keys [status headers body] :as res}
             (authorize-handler request)
 
@@ -48,19 +96,25 @@
           302                status
           "http"             (.getScheme uri)
           "localhost"        (.getHost uri)
+          3001               (.getPort uri)
           "/cb"              (.getPath uri)
           "3lR1fhAqmF"       state)
-        (let [request                               {:request-method :post
-                                                     :content-type   "application/x-www-form-urlencoded"
-                                                     :params         {:grant_type   "authorization_code"
-                                                                      :client_id    "6P1kUE5eEY"
-                                                                      :redirect_uri "http://localhost:3001/cb"
-                                                                      :code         code}}
-              {:keys [status headers body] :as res} (access-token-handler request)
+        ;; Get access_token.
+        (let [request {:request-method :post
+                       :content-type   "application/x-www-form-urlencoded"
+                       :params         {:grant_type   "authorization_code"
+                                        :client_id    "6P1kUE5eEY"
+                                        :redirect_uri "http://localhost:3001/cb"
+                                        :code         code}}
+              {:keys [status headers body] :as res}
+              (access-token-handler request)
+
               {:keys [access_token token_type
-                      expires_in refresh_token]}    (json/read-str body :key-fn keyword)]
+                      expires_in refresh_token]}
+              (json/read-str body :key-fn keyword)]
           (are [x y] (= x y)
             200 status)
+          ;; Check access_token.
           (let [request {:request-method :get
                          :content-type   "application/x-www-form-urlencoded"
                          :params         {:token      access_token
@@ -72,6 +126,7 @@
             (are [x y] (= x y)
               200    status
               active true))
+          ;; Get resource.
           (let [request {:request-method :get
                          :content-type   "application/json"
                          :headers {"authorization" (str "Bearer " access_token)}}

@@ -12,6 +12,5 @@
    (POST "/token" [] (authorization/access-token-resource auth))
    (GET  "/introspect" [] (authorization/introspect-resource auth))
 
-   ;; Resource
-   (GET "/api/accounts" [] (account/list-resource account))
-   (GET  "/ping" [] "PONG")))
+   ;; Protected resource
+   (GET "/api/accounts" [] (account/list-resource account))))
