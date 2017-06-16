@@ -19,8 +19,8 @@
                                       (get "authorization")
                                       (clojure.string/split #" ")
                                       second)
-                     client-info (auth/auth-by auth access_token)]
-                 client-info))
+                     auth-info (auth/get-auth auth access_token)]
+                 auth-info))
    :handle-ok (fn [req]
                 (json/write-str [{:id 0
                                   :name "test-user1"}

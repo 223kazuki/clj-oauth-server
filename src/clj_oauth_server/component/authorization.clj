@@ -60,13 +60,13 @@
     (include-js "https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js")
     (include-js "https://maxcdn.bootstrapcdn.com/bootstrap/3.3.0/js/bootstrap.min.js")]))
 
-(defn find-client-by-id [client-id]
+(defn find-client-by-id [datomic client-id]
   (->> db
        :client
        (filter #(= (:client_id %) client-id))
        first))
 
-(defn authenticate-user [username password]
+(defn authenticate-user [datomic username password]
   (->> db
        :user
        (filter #(and (= (:id %) username)
@@ -75,9 +75,8 @@
 
 (defprotocol IOAuth2Provider
   (new-code  [this client])
-  (auth-code [this code])
-  (new-token [this token-info])
-  (auth-by   [this token]))
+  (new-token [this code client-id redirect-uri])
+  (get-auth   [this token]))
 
 (defn get-port-or-default-port
   [uri]
@@ -93,28 +92,28 @@
   [redirect-uri response-type client]
   (let [{:keys [client_type redirect_uris]} client
         redirect-uris (some-> redirect_uris
-                              (clojure.string/split #" "))]
+                              (clojure.string/split #" "))
+        specified-redirect-uri (when redirect-uri (java.net.URI. redirect-uri))]
     (when-not (or (and (empty? redirect-uris)
                        (or (= client_type "PUBLIC")
                            (= response-type "token")))
                   (if (nil? redirect-uri)
                     (not= 1 (count redirect_uris))
                     (if (empty? redirect-uris)
-                      (or (not (.isAbsolute (java.net.URI. redirect-uri)))
-                          (.getFragment (java.net.URI. redirect-uri)))
-                      (or (not (.isAbsolute (java.net.URI. redirect-uri)))
-                          (.getFragment (java.net.URI. redirect-uri))
-                          (not-any? #(let [specified (java.net.URI. redirect-uri)
-                                           registerd (java.net.URI. %)]
+                      (or (not (.isAbsolute specified-redirect-uri))
+                          (.getFragment specified-redirect-uri))
+                      (or (not (.isAbsolute specified-redirect-uri))
+                          (.getFragment specified-redirect-uri)
+                          (not-any? #(let [registerd (java.net.URI. %)]
                                        (or
                                         (and (.getQuery registerd)
-                                             (= (.equals registerd specified)))
-                                        (and (= (.getScheme specified) (.getScheme registerd))
-                                             (= (.getUserInfo specified) (.getUserInfo registerd))
-                                             (.equalsIgnoreCase (.getHost specified) (.getHost registerd))
-                                             (== (get-port-or-default-port specified)
+                                             (= (.equals registerd specified-redirect-uri)))
+                                        (and (= (.getScheme specified-redirect-uri) (.getScheme registerd))
+                                             (= (.getUserInfo specified-redirect-uri) (.getUserInfo registerd))
+                                             (.equalsIgnoreCase (.getHost specified-redirect-uri) (.getHost registerd))
+                                             (== (get-port-or-default-port specified-redirect-uri)
                                                  (get-port-or-default-port registerd))
-                                             (= (.getPath specified) (.getPath registerd)))))
+                                             (= (.getPath specified-redirect-uri) (.getPath registerd)))))
                                     redirect-uris)))))
       (let [redirect-uri (if (and (nil? redirect-uri)
                                   (= 1 (count redirect_uris)))
@@ -139,7 +138,9 @@
   (fn [request]
     (let [{:keys [response_type client_id redirect_uri scope state
                   username password]} (:params request)
-          client (find-client-by-id client_id)]
+          explicit-redirect-uri? (some? redirect_uri)
+          scope (or scope "DEFAULT")
+          client (find-client-by-id datomic client_id)]
       (if-let [redirect-uri (and response_type
                                  client_id
                                  client
@@ -147,7 +148,7 @@
         (case response_type
           "code"
           (cond
-            (not (authenticate-user username password))
+            (not (authenticate-user datomic username password))
             {:status 200
              :headers {"Content-Type" "text/html"}
              :body (login-page auth {:error "Invalid username or password."})}
@@ -158,6 +159,7 @@
                                                           :redirect_uris
                                                           (clojure.string/split #" ")
                                                           set) redirect_uri)
+                                       :explicit-redirect-uri? explicit-redirect-uri?
                                        :scope scope})]
               {:status 302
                :headers {"Location" (format "%s?code=%s&state=%s" redirect_uri code state)}}))
@@ -177,21 +179,22 @@
     (let [{:keys [grant_type code redirect_uri client_id]} (:params request)]
       (case grant_type
         "authorization_code"
-        (let [client (auth-code auth code)]
-          (if (and (not (nil? client))
-                   (= (:redirect_uri client) redirect_uri)
-                   (= (:client_id client) client_id))
-            (let [access-token (new-token auth client)]
-              {:status 200
-               :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
-               :body (json/write-str
-                       {:access_token access-token
-                        :token_type "example"
-                        :expires_in 3600
-                        :refresh_token "tGzv3JOkF0XG5Qx2TlKWIA"})})
-            {:status 401
-             ;; TODO: How to respnse to invalid token request.
-             }))))))
+        (if-let [access-token (and (find-client-by-id datomic client_id)
+                                   (new-token auth code client_id redirect_uri))]
+          (let [{:keys [token-type expires-in refresh-token]} (get-auth auth access-token)]
+            {:status 200
+             :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
+             :body (json/write-str
+                    {:access_token access-token
+                     :token_type token-type
+                     :expires_in expires-in
+                     :refresh_token refresh-token})})
+          {:status 400
+           :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
+           :body (json/write-json {:error "invalid_grant"})})
+        {:status 400
+         :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
+         :body (json/write-json {:error "unsupported_grant_type"})}))))
 
 (defn introspect-resource
   [{:keys [datomic] :as auth}]
@@ -199,17 +202,12 @@
    :available-media-types ["application/x-www-form-urlencoded" "application/json"]
    :allowed-methods [:get]
    :handle-ok (fn [{:keys [request]}]
-                (let [{:keys [token token_hint]} (:params request)
-                      token-info (auth-by auth token)]
-                  (json/write-str {:active    (not (nil? token-info))
-                                   :client_id "l238j323ds-23ij4"
-                                   :username  "jdoe"
-                                   :scope     (:scope token-info)
-                                   :sub       "Z5O3upPC88QrAjx00dis"
-                                   :aud       "https://protected.example.net/resource"
-                                   :iss       "https://server.example.com/"
-                                   :exp       1419356238
-                                   :iat       1419350238})))))
+                (let [{:keys [token token_type_hint]} (:params request)
+                      {:keys [client] :as token-info} (get-auth auth token)]
+                  (json/write-str {:active     (some? token-info)
+                                   :scope      "DEFAULT"
+                                   :client_id  (:client-id client)
+                                   :token_type "bearer"})))))
 
 (defrecord AuthorizationComponent [disposable?]
   component/Lifecycle
@@ -217,11 +215,9 @@
   (start [component]
     (if (:token-cache component)
       component
-      (let [code-cache (atom (cache/ttl-cache-factory {} :ttl (* 10 60 1000)))
-            token-cache (atom (cache/ttl-cache-factory {} :ttl (* 30 60 1000)))]
-        (assoc component
-               :code-cache code-cache
-               :token-cache token-cache))))
+      (assoc component
+             :code-cache (atom (cache/ttl-cache-factory {} :ttl (* 10 60 1000)))
+             :token-cache (atom (cache/ttl-cache-factory {} :ttl (* 30 60 1000))))))
 
   (stop [component]
     (if disposable?
@@ -232,18 +228,29 @@
   (new-code [component client]
     (let [{:keys [client_id redirect_uri]} client
           code (re-rand #"[a-zA-Z0-9]{10}")]
-      (swap! (:code-cache component) assoc code client)
+      (swap! (:code-cache component) assoc code {:client client :used? false})
       code))
-  (auth-code [component code]
-    (when-let [client (cache/lookup @(:code-cache component) code)]
-      (swap! (:code-cache component) dissoc code)
-      client))
-  (new-token [component token-info]
-    (let [access-token (re-rand #"[a-zA-Z0-9]{22}")]
-      (swap! (:token-cache component) assoc access-token token-info)
-      access-token))
 
-  (auth-by [component access-token]
+  (new-token [component code client-id redirect-uri]
+    (when-let [{:keys [client used? access-token]}
+               (cache/lookup @(:code-cache component) code)]
+      (when (and (= (:client_id client) client-id)
+                 (= (:redirect_uri client) redirect-uri))
+        (if used?
+          (do
+            (swap! (:token-cache component) dissoc access-token)
+            (swap! (:code-cache component) dissoc code))
+          (let [access-token  (re-rand #"[a-zA-Z0-9]{22}")
+                refresh-token (re-rand #"[a-zA-Z0-9]{22}")]
+            (swap! (:token-cache component) update-in [access-token]
+                   #(assoc %
+                           :client client :expires-in 1800 :token-type "bearer"
+                           :refresh-token refresh-token))
+            (swap! (:code-cache component) update-in [code]
+                   #(assoc % :used? true :access-token access-token))
+            access-token)))))
+
+  (get-auth [component access-token]
     (cache/lookup @(:token-cache component) access-token)))
 
 (defn authorization-component [options]
