@@ -17,6 +17,12 @@
              :client_type      "PUBLIC"
              :redirect_uris    "http://localhost:3001/cb"
              :application_name "Sample Application"
+             :application_type "WEB"}
+            {:client_id        "bRM1wEFMOnY"
+             :client_secret    "2aItewOATR"
+             :client_type      "PUBLIC"
+             :redirect_uris    "https://example.com/cb"
+             :application_name "Sample Application"
              :application_type "WEB"}]
    :user   [{:id       "223"
              :password "223"}]})
@@ -166,7 +172,34 @@
 
           ;; TODO
           "token"
-          (authorization-error-response redirect_uri "unsupported_response_type" state)
+          (cond
+            (not (authenticate-user datomic username password))
+            {:status 200
+             :headers {"Content-Type" "text/html"}
+             :body (login-page auth {:error "Invalid username or password."})}
+
+            :else
+            (let [code (new-code auth {:client_id client_id
+                                       :redirect_uri ((-> client
+                                                          :redirect_uris
+                                                          (clojure.string/split #" ")
+                                                          set) redirect_uri)
+                                       :explicit-redirect-uri? explicit-redirect-uri?
+                                       :scope scope})]
+              (if-let [access-token (and (find-client-by-id datomic client_id)
+                                         (new-token auth code client_id redirect_uri))]
+                (let [{:keys [token-type expires-in client]} (get-auth auth access-token)]
+                  {:status 200
+                   :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
+                   :body (json/write-str
+                          {:access_token  access-token
+                           :token_type    token-type
+                           :expires_in    expires-in
+                           :scope         (:scope client)
+                           :state         state})})
+                {:status 400
+                 :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
+                 :body (json/write-json {:error "invalid_grant"})})))
 
           (authorization-error-response redirect_uri "unsupported_response_type" state))
         {:status 200
@@ -185,9 +218,9 @@
             {:status 200
              :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
              :body (json/write-str
-                    {:access_token access-token
-                     :token_type token-type
-                     :expires_in expires-in
+                    {:access_token  access-token
+                     :token_type    token-type
+                     :expires_in    expires-in
                      :refresh_token refresh-token})})
           {:status 400
            :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
@@ -205,8 +238,8 @@
                 (let [{:keys [token token_type_hint]} (:params request)
                       {:keys [client] :as token-info} (get-auth auth token)]
                   (json/write-str {:active     (some? token-info)
-                                   :scope      "DEFAULT"
-                                   :client_id  (:client-id client)
+                                   :scope      (:scope client)
+                                   :client_id  (:client_id client)
                                    :token_type "bearer"})))))
 
 (defrecord AuthorizationComponent [disposable?]
