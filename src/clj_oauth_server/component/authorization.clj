@@ -189,14 +189,14 @@
               (if-let [access-token (and (find-client-by-id datomic client_id)
                                          (new-token auth code client_id redirect_uri))]
                 (let [{:keys [token-type expires-in client]} (get-auth auth access-token)]
-                  {:status 200
-                   :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
-                   :body (json/write-str
-                          {:access_token  access-token
-                           :token_type    token-type
-                           :expires_in    expires-in
-                           :scope         (:scope client)
-                           :state         state})})
+                  {:status 302
+                   :headers {"Location" (format "%s?access_token=%s&token_type=%s&expires_in=%s&scope=%s&state=%s"
+                                                redirect-uri
+                                                access-token
+                                                token-type
+                                                expires-in
+                                                (:scope client)
+                                                state)}})
                 {:status 400
                  :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
                  :body (json/write-json {:error "invalid_grant"})})))

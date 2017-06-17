@@ -164,13 +164,21 @@
             {:keys [status headers body] :as res}
             (authorize-handler request)
 
+            uri (java.net.URI. (get headers "Location"))
+
             {:keys [access_token token_type
                     expires_in state scope]}
-            (json/read-str body :key-fn keyword)]
+            (->> (clojure.string/split (.getQuery uri) #"&")
+                 (map #(clojure.string/split % #"="))
+                 (reduce #(assoc %1 (keyword (first %2)) (second %2)) {}))]
+        (println "!!!!" access_token)
         (are [x y] (= x y)
-          200                status
+          302                status
+          "https"            (.getScheme uri)
+          "example.com"      (.getHost uri)
+          "/cb"              (.getPath uri)
           "bearer"           token_type
-          1800               expires_in
+          "1800"             expires_in
           "3lR1fhAqmF"       state
           "test-scope"       scope)
         ;; Check access_token.
