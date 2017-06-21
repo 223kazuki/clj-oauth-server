@@ -127,7 +127,8 @@
               200          status
               true         active
               "6P1kUE5eEY" client_id
-              "test-scope" scope))
+              "test-scope" scope
+              "223"        username))
           ;; Get resource.
           (let [request {:request-method :get
                          :content-type   "application/json"
@@ -190,8 +191,11 @@
               {:keys [active client_id username scope] :as res}
               (json/read-str body :key-fn keyword)]
           (are [x y] (= x y)
-            200    status
-            active true))
+            200           status
+            active        true
+            "bRM1wEFMOnY" client_id
+            "test-scope"  scope
+            "223"         username))
         ;; Get resource.
         (let [request {:request-method :get
                        :content-type   "application/json"
@@ -293,4 +297,5 @@
               200          status
               true         active
               "6P1kUE5eEY" client_id
-              "test-scope" scope))))))))
+              "test-scope" scope
+              "223"        username))))))))

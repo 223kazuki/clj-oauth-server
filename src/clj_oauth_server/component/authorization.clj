@@ -167,7 +167,8 @@
                                                           (clojure.string/split #" ")
                                                           set) redirect_uri)
                                        :explicit-redirect-uri? explicit-redirect-uri?
-                                       :scope scope})]
+                                       :scope scope
+                                       :username username})]
               {:status 302
                :headers {"Location" (format "%s?code=%s&state=%s" redirect_uri code state)}}))
 
@@ -185,7 +186,8 @@
                                                           (clojure.string/split #" ")
                                                           set) redirect_uri)
                                        :explicit-redirect-uri? explicit-redirect-uri?
-                                       :scope scope})]
+                                       :scope scope
+                                       :username username})]
               (if-let [access-token (and (find-client-by-id datomic client_id)
                                          (new-token auth code client_id redirect_uri))]
                 (let [{:keys [token-type expires-in client]} (get-auth auth access-token)]
@@ -268,7 +270,8 @@
                   (json/write-str {:active     (some? token-info)
                                    :scope      (:scope client)
                                    :client_id  (:client_id client)
-                                   :token_type "bearer"})))))
+                                   :token_type "bearer"
+                                   :username   (:username client)})))))
 
 (defrecord AuthorizationComponent [disposable?]
   component/Lifecycle
