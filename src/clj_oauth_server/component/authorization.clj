@@ -80,9 +80,10 @@
        first))
 
 (defprotocol IOAuth2Provider
-  (new-code  [this client])
-  (new-token [this code client-id redirect-uri])
-  (get-auth   [this token]))
+  (new-code     [this client])
+  (new-token    [this code client-id redirect-uri])
+  (update-token [this refresh-token])
+  (get-auth     [this token]))
 
 (defn get-port-or-default-port
   [uri]
@@ -144,9 +145,9 @@
   (fn [request]
     (let [{:keys [response_type client_id redirect_uri scope state
                   username password]} (:params request)
-          explicit-redirect-uri? (some? redirect_uri)
-          scope (or scope "DEFAULT")
-          client (find-client-by-id datomic client_id)]
+          explicit-redirect-uri?      (some? redirect_uri)
+          scope                       (or scope "DEFAULT")
+          client                      (find-client-by-id datomic client_id)]
       (if-let [redirect-uri (and response_type
                                  client_id
                                  client
@@ -170,7 +171,6 @@
               {:status 302
                :headers {"Location" (format "%s?code=%s&state=%s" redirect_uri code state)}}))
 
-          ;; TODO
           "token"
           (cond
             (not (authenticate-user datomic username password))
@@ -199,7 +199,7 @@
                                                 state)}})
                 {:status 400
                  :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
-                 :body (json/write-json {:error "invalid_grant"})})))
+                 :body (json/write-str {:error "invalid_grant"})})))
 
           (authorization-error-response redirect_uri "unsupported_response_type" state))
         {:status 200
@@ -208,8 +208,9 @@
 
 (defn access-token-resource
   [{:keys [datomic] :as auth}]
+  ;; TODO: Check client type.
   (fn [request]
-    (let [{:keys [grant_type code redirect_uri client_id]} (:params request)]
+    (let [{:keys [grant_type code redirect_uri client_id refresh_token]} (:params request)]
       (case grant_type
         "authorization_code"
         (if-let [access-token (and (find-client-by-id datomic client_id)
@@ -224,10 +225,37 @@
                      :refresh_token refresh-token})})
           {:status 400
            :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
-           :body (json/write-json {:error "invalid_grant"})})
+           :body (json/write-str {:error "invalid_grant"})})
+
+        "refresh_token"
+        (cond
+          (nil? refresh_token)
+          {:status 400
+           :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
+           :body (json/write-str {:error "invalid_request"})}
+
+          ;; TODO: Check scope.
+          false {:status 400
+                 :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
+                 :body (json/write-str {:error "invalid_scope"})}
+
+          :else
+          (if-let [access-token (update-token auth refresh_token)]
+            (let [{:keys [token-type expires-in refresh-token]} (get-auth auth access-token)]
+              {:status 200
+               :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
+               :body (json/write-str
+                      {:access_token  access-token
+                       :token_type    token-type
+                       :expires_in    expires-in
+                       :refresh_token refresh-token})})
+            {:status 400
+             :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
+             :body (json/write-str {:error "invalid_grant"})}))
+
         {:status 400
          :headers {"Content-Type" "application/json;charset=UTF-8" "Cache-Control" "no-store" "Pragma" "no-cache"}
-         :body (json/write-json {:error "unsupported_grant_type"})}))))
+         :body (json/write-str {:error "unsupported_grant_type"})}))))
 
 (defn introspect-resource
   [{:keys [datomic] :as auth}]
@@ -249,12 +277,16 @@
     (if (:token-cache component)
       component
       (assoc component
+             ;; Authorization Code: 10 min.
              :code-cache (atom (cache/ttl-cache-factory {} :ttl (* 10 60 1000)))
-             :token-cache (atom (cache/ttl-cache-factory {} :ttl (* 30 60 1000))))))
+             ;; Access Token: 30 min.
+             :token-cache (atom (cache/ttl-cache-factory {} :ttl (* 30 60 1000)))
+             ;; Refresh Token: 1 day.
+             :refresh-token-cache (atom (cache/ttl-cache-factory {} :ttl (* 24 60 60 1000))))))
 
   (stop [component]
     (if disposable?
-      (dissoc component :code-cache :token-cache)
+      (dissoc component :code-cache :token-cache :refresh-token-cache)
       component))
 
   IOAuth2Provider
@@ -277,11 +309,28 @@
                 refresh-token (re-rand #"[a-zA-Z0-9]{22}")]
             (swap! (:token-cache component) update-in [access-token]
                    #(assoc %
-                           :client client :expires-in 1800 :token-type "bearer"
+                           :client client :expires-in 18000 :token-type "bearer"
                            :refresh-token refresh-token))
+            (swap! (:refresh-token-cache component) update-in [refresh-token]
+                   #(assoc % :access-token access-token))
             (swap! (:code-cache component) update-in [code]
                    #(assoc % :used? true :access-token access-token))
             access-token)))))
+
+  (update-token [component refresh-token]
+    (when-let [{:keys [access-token]} (cache/lookup @(:refresh-token-cache component) refresh-token)]
+      (when-let [{:keys [client]} (cache/lookup @(:token-cache component) access-token)]
+        (swap! (:token-cache component) dissoc access-token)
+        (swap! (:refresh-token-cache component) dissoc refresh-token)
+        (let [access-token  (re-rand #"[a-zA-Z0-9]{22}")
+              refresh-token (re-rand #"[a-zA-Z0-9]{22}")]
+          (swap! (:token-cache component) update-in [access-token]
+                 #(assoc %
+                         :client client :expires-in 18000 :token-type "bearer"
+                         :refresh-token refresh-token))
+          (swap! (:refresh-token-cache component) update-in [refresh-token]
+                 #(assoc % :access-token access-token))
+          access-token))))
 
   (get-auth [component access-token]
     (cache/lookup @(:token-cache component) access-token)))

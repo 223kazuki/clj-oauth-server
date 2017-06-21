@@ -171,14 +171,13 @@
             (->> (clojure.string/split (.getQuery uri) #"&")
                  (map #(clojure.string/split % #"="))
                  (reduce #(assoc %1 (keyword (first %2)) (second %2)) {}))]
-        (println "!!!!" access_token)
         (are [x y] (= x y)
           302                status
           "https"            (.getScheme uri)
           "example.com"      (.getHost uri)
           "/cb"              (.getPath uri)
           "bearer"           token_type
-          "1800"             expires_in
+          "18000"            expires_in
           "3lR1fhAqmF"       state
           "test-scope"       scope)
         ;; Check access_token.
@@ -213,4 +212,85 @@
              {:id 4
               :name "test-user5"}
              {:id 5
-              :name "test-user6"}] accounts))))))
+              :name "test-user6"}] accounts))))
+    (testing "Refresh token success."
+      ;; Get authorization code.
+      (let [request {:request-method :post
+                     :content-type   "application/x-www-form-urlencoded"
+                     :params         {:response_type "code"
+                                      :client_id     "6P1kUE5eEY"
+                                      :state         "3lR1fhAqmF"
+                                      :redirect_uri  "http://localhost:3001/cb"
+                                      :scope         "test-scope"
+                                      :username      "223"
+                                      :password      "223"}}
+
+            {:keys [status headers body] :as res}
+            (authorize-handler request)
+
+            uri                  (java.net.URI. (get headers "Location"))
+            {:keys [code state]} (->> (clojure.string/split (.getQuery uri) #"&")
+                                      (map #(clojure.string/split % #"="))
+                                      (reduce #(assoc %1 (keyword (first %2)) (second %2)) {}))]
+        (are [x y] (= x y)
+          302                status
+          "http"             (.getScheme uri)
+          "localhost"        (.getHost uri)
+          3001               (.getPort uri)
+          "/cb"              (.getPath uri)
+          "3lR1fhAqmF"       state)
+        ;; Get access_token.
+        (let [request {:request-method :post
+                       :content-type   "application/x-www-form-urlencoded"
+                       :params         {:grant_type   "authorization_code"
+                                        :client_id    "6P1kUE5eEY"
+                                        :redirect_uri "http://localhost:3001/cb"
+                                        :code         code}}
+              {:keys [status headers body] :as res}
+              (access-token-handler request)
+
+              {:keys [access_token token_type
+                      expires_in refresh_token]}
+              (json/read-str body :key-fn keyword)]
+          (are [x y] (= x y)
+            200 status)
+          ;; Refresh access_token.
+          (let [old_access_token access_token
+                request {:request-method :post
+                         :content-type   "application/x-www-form-urlencoded"
+                         :params         {:grant_type    "refresh_token"
+                                          :refresh_token refresh_token}}
+              {:keys [status headers body] :as res}
+              (access-token-handler request)
+
+              {:keys [access_token token_type
+                      expires_in refresh_token]}
+              (json/read-str body :key-fn keyword)]
+          (are [x y] (= x y)
+            200 status)
+          ;; Check old access_token.
+          (let [request {:request-method :get
+                         :content-type   "application/x-www-form-urlencoded"
+                         :params         {:token      old_access_token
+                                          :token_hint "test"}}
+                {:keys [status headers body] :as res}
+                (introspect-handler request)
+                {:keys [active client_id username scope] :as res}
+                (json/read-str body :key-fn keyword)]
+            (are [x y] (= x y)
+              200          status
+              false        active))
+          ;; Check access_token.
+          (let [request {:request-method :get
+                         :content-type   "application/x-www-form-urlencoded"
+                         :params         {:token      access_token
+                                          :token_hint "test"}}
+                {:keys [status headers body] :as res}
+                (introspect-handler request)
+                {:keys [active client_id username scope] :as res}
+                (json/read-str body :key-fn keyword)]
+            (are [x y] (= x y)
+              200          status
+              true         active
+              "6P1kUE5eEY" client_id
+              "test-scope" scope))))))))
